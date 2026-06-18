@@ -156,7 +156,7 @@ func (m *peerManager) Register(port int, meta map[string]string) error {
 
 	server, err := zeroconf.Register(
 		m.selfID,      // 服务实例名
-		"_p2pft._tcp", // 服务类型（p2p file transfer）
+		"_comet._tcp", // 服务类型（p2p file transfer）
 		"local.",      // 域
 		"",
 		port,       // 端口
@@ -191,21 +191,20 @@ func (m *peerManager) startBrowsing() error {
 	}
 	m.resolver = resolver
 
-	// 创建浏览通道
 	entries := make(chan *zeroconf.ServiceEntry)
 
-	// 启动浏览
+	// 启动浏览（直接使用 m.ctx，确保只有 Stop 时才会取消）
+	m.wg.Add(1)
 	go func() {
-		ctx, cancel := context.WithCancel(m.ctx)
-		defer cancel()
-
-		// 持续浏览（zeroconf 会不断发送更新）
-		if err := resolver.Browse(ctx, "_comet._tcp", "local.", entries); err != nil {
+		defer m.wg.Done()
+		// 关键：使用 m.ctx，不派生新的
+		if err := resolver.Browse(m.ctx, "_comet._tcp", "local.", entries); err != nil {
 			m.logger.Errorf("[Discovery] 浏览失败: %v", err)
 		}
+		// Browse 返回后，entries 通道会被关闭
 	}()
 
-	// 处理发现的事件
+	// 处理发现的条目
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
@@ -386,16 +385,13 @@ func (m *peerManager) loadCachedPeers() error {
 }
 
 func (m *peerManager) saveCachedPeersLocked() {
-	// 保存所有在线节点到缓存（异步，不影响主流程）
+	// 复制当前所有 peer 到一个切片，避免在锁内启动 goroutine 再读 map
+	peers := make([]*models.Peer, 0, len(m.peers))
+	for _, p := range m.peers {
+		peers = append(peers, p)
+	}
+	// 异步保存
 	go func() {
-		peers := make([]*models.Peer, 0, len(m.peers))
-		m.mu.RLock()
-		for _, p := range m.peers {
-			peers = append(peers, p)
-		}
-		m.mu.RUnlock()
-
-		// 调用存储层保存
 		for _, p := range peers {
 			if err := m.store.SavePeer(p); err != nil {
 				m.logger.Warnf("[Discovery] 保存节点缓存失败: %v", err)
