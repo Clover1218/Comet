@@ -76,10 +76,15 @@ type peerManager struct {
 	selfID     string // 自己的 ID（用于过滤自己）
 	port       int    // 监听端口
 	registered bool   // 是否已注册
+	iface      *net.Interface
 }
 
 // NewPeerManager 创建节点管理器
-func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port int) Manager {
+func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port int, interfaceName string) Manager {
+	iface, err := net.InterfaceByName(interfaceName)
+	if err != nil {
+		return nil
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	return &peerManager{
 		logger:  log,
@@ -90,11 +95,13 @@ func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port
 		eventCh: make(chan Event, 100), // 缓冲100个事件
 		ctx:     ctx,
 		cancel:  cancel,
+		iface:   iface,
 	}
 }
 
 // Start 启动发现
 func (m *peerManager) Start(ctx context.Context) error {
+
 	m.logger.Infof("[Discovery] 启动节点发现, 自身ID: %s, 端口: %d", m.selfID, m.port)
 
 	// 1. 从存储加载缓存的节点列表（离线节点也加载，便于快速显示）
@@ -159,9 +166,9 @@ func (m *peerManager) Register(port int, meta map[string]string) error {
 		"_comet._tcp", // 服务类型（p2p file transfer）
 		"local.",      // 域
 		"",
-		port,       // 端口
-		txtRecords, // TXT记录
-		nil,        // 回调（可留空）
+		port,                      // 端口
+		txtRecords,                // TXT记录
+		[]net.Interface{*m.iface}, // 回调（可留空）
 	)
 	if err != nil {
 		return err
@@ -171,30 +178,7 @@ func (m *peerManager) Register(port int, meta map[string]string) error {
 	m.registered = true
 	m.logger.Infof("[Discovery] mDNS注册成功: %s, 端口: %d", m.selfID, port)
 	m.wg.Add(1)
-	go m.heartbeatLoop()
 	return nil
-}
-func (m *peerManager) heartbeatLoop() {
-	defer m.wg.Done()
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-m.ctx.Done():
-			return
-		case <-ticker.C:
-			// 调用 SetText 会触发重新广播，让其他节点更新 LastSeen
-			if m.service != nil && m.registered {
-				m.service.SetText([]string{
-					"id=" + m.selfID,
-					"ver=1.0.0",
-					"ts=" + strconv.FormatInt(time.Now().Unix(), 10), // 加一个时间戳，强制变化
-				})
-				m.logger.Debugf("[Discovery] 发送心跳广播")
-			}
-		}
-	}
 }
 
 // Unregister 注销服务
@@ -215,31 +199,63 @@ func (m *peerManager) startBrowsing() error {
 	}
 	m.resolver = resolver
 
-	entries := make(chan *zeroconf.ServiceEntry)
-
 	// 启动浏览（直接使用 m.ctx，确保只有 Stop 时才会取消）
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		// 关键：使用 m.ctx，不派生新的
-		if err := resolver.Browse(m.ctx, "_comet._tcp", "local.", entries); err != nil {
-			m.logger.Errorf("[Discovery] 浏览失败: %v", err)
+		ticker := time.NewTicker(10 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.logger.Infof("[Discovery] 尝试浏览服务")
+				m.doBrowse() // 每次独立扫描，互不干扰
+			}
 		}
-		// Browse 返回后，entries 通道会被关闭
 	}()
-
-	// 处理发现的条目
-	m.wg.Add(1)
-	go func() {
-		defer m.wg.Done()
-		for entry := range entries {
-			m.handleServiceEntry(entry)
-		}
-		m.logger.Info("[Discovery] 浏览通道已关闭")
-	}()
-
 	m.logger.Info("[Discovery] mDNS浏览已启动")
 	return nil
+}
+func (m *peerManager) doBrowse() {
+	// 1. 每次新建 resolver（避免状态残留）
+
+	resolver, err := zeroconf.NewResolver(
+		zeroconf.SelectIfaces([]net.Interface{*m.iface}), // ✅ 正确写法
+		zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6))
+	if err != nil {
+		m.logger.Errorf("创建Resolver失败: %v", err)
+		return
+	}
+
+	// 2. 创建独立的 channel
+	entries := make(chan *zeroconf.ServiceEntry, 10)
+
+	// 3. 启动消费 goroutine（异步处理结果）
+	go func() {
+		for entry := range entries {
+			m.logger.Infof("找到一个Entry: %s", entry.HostName)
+			m.handleServiceEntry(entry)
+		}
+		m.logger.Debug("本次扫描的 channel 已关闭")
+	}()
+
+	// 4. 执行浏览（带超时）
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel() // 确保函数退出时释放资源
+
+	err = resolver.Browse(ctx, "_comet._tcp", "local.", entries)
+	if err != nil {
+		m.logger.Errorf("浏览服务出错: %v", err)
+		// 如果 Browse 返回错误，channel 可能未被关闭，需手动关闭防止消费 goroutine 永久阻塞
+		close(entries)
+		return
+	}
+
+	// 5. 等待超时或手动取消（Browse 会在 ctx 到期后自动关闭 entries）
+	<-ctx.Done()
+	m.logger.Debug("本次扫描结束")
 }
 
 // handleServiceEntry 处理发现的节点

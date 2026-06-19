@@ -312,6 +312,7 @@ func main() {
 		store,
 		config.GlobalConfig.Node.ID,
 		config.GlobalConfig.Network.Port,
+		config.GlobalConfig.Network.InterfaceName,
 	)
 
 	// 启动发现

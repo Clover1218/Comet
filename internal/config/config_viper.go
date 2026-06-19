@@ -23,6 +23,7 @@ type NetworkConfig struct {
 	Port              int    `mapstructure:"port"`
 	DiscoveryEnabled  bool   `mapstructure:"discovery_enabled"`
 	DiscoveryInterval int    `mapstructure:"discovery_interval"`
+	InterfaceName     string `mapstructure:"interface_name"`
 }
 type StorageConfig struct {
 	DataDir        string `mapstructure:"data_dir"`
