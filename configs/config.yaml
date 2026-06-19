@@ -1,12 +1,12 @@
 node:
-  id: "abcd"                          # 留空则自动生成（基于主机名+MAC）
-  name: "Clover"                        # 留空则使用主机名
+  id: "aasddas"                          # 留空则自动生成（基于主机名+MAC）
+  name: "revloC"                        # 留空则使用主机名
 
 network:
   listen_addr: "[::]"             # IPv6通配地址，接收所有网卡
-  port: 9000
+  port: 9001
   discovery_enabled: true
-  discovery_interval: 30        # mDNS广播间隔
+  discovery_interval: 5        # mDNS广播间隔
 
 # 传输设置
 transfer:

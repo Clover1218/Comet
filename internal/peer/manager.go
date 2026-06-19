@@ -170,7 +170,31 @@ func (m *peerManager) Register(port int, meta map[string]string) error {
 	m.service = server
 	m.registered = true
 	m.logger.Infof("[Discovery] mDNS注册成功: %s, 端口: %d", m.selfID, port)
+	m.wg.Add(1)
+	go m.heartbeatLoop()
 	return nil
+}
+func (m *peerManager) heartbeatLoop() {
+	defer m.wg.Done()
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-m.ctx.Done():
+			return
+		case <-ticker.C:
+			// 调用 SetText 会触发重新广播，让其他节点更新 LastSeen
+			if m.service != nil && m.registered {
+				m.service.SetText([]string{
+					"id=" + m.selfID,
+					"ver=1.0.0",
+					"ts=" + strconv.FormatInt(time.Now().Unix(), 10), // 加一个时间戳，强制变化
+				})
+				m.logger.Debugf("[Discovery] 发送心跳广播")
+			}
+		}
+	}
 }
 
 // Unregister 注销服务
