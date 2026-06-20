@@ -3,6 +3,7 @@ package engine
 import (
 	"archive/zip"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -126,6 +127,7 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 	// 5. 接收分块
 	var transferred int64
 	totalChunks := int((totalSize + r.chunkSize - 1) / r.chunkSize)
+	r.logger.Infof("[Receiver] 总块: %d 总大小: %d ", totalChunks, totalSize)
 	completed := make([]bool, totalChunks)
 	if cp != nil {
 		completed = cp.Completed
@@ -163,13 +165,20 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 			continue
 		}
 
-		// 解析分块
-		chunkParts := strings.SplitN(string(payload[:8]), "|", 2)
-		if len(chunkParts) != 2 {
+		if len(payload) < 8 {
+			r.logger.Warnf("[Receiver] 分块数据太短: %d", len(payload))
 			continue
 		}
-		idx, _ := strconv.Atoi(chunkParts[0])
-		data := payload[8:]
+
+		idx := int(binary.BigEndian.Uint32(payload[:4]))
+		dataLen := int(binary.BigEndian.Uint32(payload[4:8]))
+
+		if len(payload) < 8+dataLen {
+			r.logger.Warnf("[Receiver] 分块数据长度不匹配: 期望 %d, 实际 %d", dataLen, len(payload)-8)
+			continue
+		}
+
+		data := payload[8 : 8+dataLen]
 
 		// 写入文件
 		offset := int64(idx) * r.chunkSize
@@ -177,14 +186,14 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 			r.logger.Errorf("[Receiver] 写入失败: %v", err)
 			continue
 		}
-
-		completed[idx] = true
+		r.logger.Infof("[Receiver] idx: %d", idx)
+		// completed[idx] = true
 		atomic.AddInt64(&transferred, int64(len(data)))
 
 		// 保存进度
-		if atomic.LoadInt64(&transferred)%(r.chunkSize*10) == 0 {
-			r.saveCheckpoint(sessionID, completed)
-		}
+		// if atomic.LoadInt64(&transferred)%(r.chunkSize*10) == 0 {
+		// 	r.saveCheckpoint(sessionID, completed)
+		// }
 
 		if r.progressFunc != nil {
 			r.progressFunc(sessionID, transferred, totalSize)

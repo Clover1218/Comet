@@ -3,6 +3,7 @@ package engine
 import (
 	"archive/zip"
 	"context"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"os"
@@ -58,36 +59,50 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 	sessionID := uuid.New().String()
 	s.logger.Infof("[Sender] 开始传输: %s -> %s, session: %s", path, targetAddr, sessionID)
 
-	// 1. 连接对端
 	conn, err := s.transport.Dial(ctx, targetAddr)
 	if err != nil {
 		return fmt.Errorf("连接失败: %w", err)
 	}
 	defer conn.Close()
 
-	// 2. 认证
 	if err := s.authenticate(conn); err != nil {
 		return err
 	}
 
-	// 3. 准备数据流
-
 	var totalSize int64
 	var displayName string
-	// var reader io.Reader
+	var finalPath string
+	var isTempFile bool
 	if isFolder {
-		// 打包文件夹为ZIP流
-		displayName = filepath.Base(path) + ".zip"
-		_, pw := io.Pipe()
-		// reader = pr
-		go func() {
-			err := s.zipFolder(path, pw)
-			pw.CloseWithError(err)
-		}()
+		// 1. 创建临时文件
+		tmpFile, err := os.CreateTemp("", "comet_zip_*.zip")
+		if err != nil {
+			return err
+		}
+		// 注意：先不 defer close，后面复用完再删
 
-		// 需要先计算总大小（遍历文件夹）
-		totalSize, _ = s.folderSize(path)
+		// 2. 压缩到临时文件
+		if err := s.zipFolder(path, tmpFile); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpFile.Name())
+			return err
+		}
+
+		// 3. 获取准确大小，并重置文件指针到开头
+		info, _ := tmpFile.Stat()
+		totalSize = info.Size()
+		displayName = filepath.Base(path) + ".zip"
+
+		// 4. 关闭句柄，让后续的 os.Open 重新打开（避免指针状态混乱）
+		tmpFile.Close()
+
+		finalPath = tmpFile.Name()
+		isTempFile = true // 标记传输完成后要删除
+		isFolder = false  // 关键：欺骗后续逻辑，把它当普通文件传输
+
+		s.logger.Infof("[Sender] 文件夹已打包为临时文件: %s (大小: %d)", finalPath, totalSize)
 	} else {
+		// 普通文件逻辑
 		file, err := os.Open(path)
 		if err != nil {
 			return err
@@ -96,9 +111,8 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 		info, _ := file.Stat()
 		totalSize = info.Size()
 		displayName = filepath.Base(path)
-		// reader = file
+		finalPath = path
 	}
-
 	// 4. 发送元数据
 	meta := fmt.Sprintf("%s|%d|%s", displayName, totalSize, sessionID)
 	if err := conn.SendPacket(network.CmdMeta, []byte(meta)); err != nil {
@@ -136,9 +150,13 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 	chunkSize := s.chunkSize
 	totalChunks := int((totalSize + chunkSize - 1) / chunkSize)
 	completed = make([]bool, totalChunks)
-
+	s.logger.Infof("[Receiver] 总块: %d 总大小: %d ", totalChunks, totalSize)
 	var transferred int64
-	// buffer := make([]byte, chunkSize)
+	sharedFile, err := os.Open(finalPath)
+	if err != nil {
+		return err
+	}
+	defer sharedFile.Close()
 
 	// 使用 errgroup 并发上传
 	g, ctx := errgroup.WithContext(ctx)
@@ -156,6 +174,7 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 			break
 		}
 
+		// 跳过已完成的块（断点续传）
 		if completed[chunkIdx] {
 			chunkIdx++
 			continue
@@ -171,44 +190,37 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 				size = totalSize - offset
 			}
 
-			// 读取分块数据
+			// 读取分块数据（使用共享文件句柄，ReadAt 线程安全）
 			data := make([]byte, size)
-			// 这里需要重新打开reader或seek，简化实现用ReadFull
-			// 实际需要用文件seek，这里用reader方式
-			// 对于zip reader不能用seek，所以改为打开文件
-			// var chunkReader io.ReaderAt
-			var file *os.File
-			if isFolder {
-				// 对于ZIP流，无法seek，简化为顺序传输
-				// 实际实现需要更复杂
-				return nil
-			}
-			file, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer file.Close()
-			_, err = file.ReadAt(data, offset)
+			_, err := sharedFile.ReadAt(data, offset)
 			if err != nil && err != io.EOF {
 				return err
 			}
 
+			// 构建分块报文：前8字节存放块索引和长度（简单用字符串拼接）
+			header := make([]byte, 8)
+			binary.BigEndian.PutUint32(header[0:4], uint32(idx))
+			binary.BigEndian.PutUint32(header[4:8], uint32(len(data)))
+
 			chunkPayload := make([]byte, 8+len(data))
-			copy(chunkPayload[0:8], fmt.Sprintf("%d|%d", idx, len(data)))
+			copy(chunkPayload[0:8], header)
 			copy(chunkPayload[8:], data)
 
+			// 发送分块
 			if err := conn.SendPacket(network.CmdChunk, chunkPayload); err != nil {
 				return err
 			}
 
+			// 更新进度
 			atomic.AddInt64(&transferred, size)
 			completed[idx] = true
 
-			// 保存进度
+			// 保存断点
 			s.saveCheckpoint(sessionID, completed)
 
 			if s.progressFunc != nil {
-				s.progressFunc(sessionID, transferred, totalSize)
+				// 注意：transferred 是原子值，这里直接读取（可能稍有偏差，但可接受）
+				s.progressFunc(sessionID, atomic.LoadInt64(&transferred), totalSize)
 			}
 			s.logger.Debugf("[Sender] 分块 %d 已发送 (%d bytes)", idx, size)
 			return nil
@@ -223,8 +235,10 @@ func (s *Sender) SendStream(ctx context.Context, path string, targetAddr string,
 	if err := conn.SendPacket(network.CmdComplete, []byte(sessionID)); err != nil {
 		return err
 	}
-
-	// 9. 清理
+	if isTempFile {
+		os.Remove(finalPath)
+		s.logger.Infof("[Sender] 已清理临时压缩包: %s", finalPath)
+	}
 	s.store.DeleteCheckpoint(sessionID)
 	s.logger.Infof("[Sender] ✅ 传输完成: %s -> %s", displayName, targetAddr)
 	return nil
