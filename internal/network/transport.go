@@ -34,7 +34,7 @@ func NewTCPTransport() Transport {
 }
 
 func (t *tcpTransport) Listen(ctx context.Context, addr string) (Listener, error) {
-	ln, err := net.Listen("tcp6", addr)
+	ln, err := net.Listen("tcp4", addr)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (t *tcpTransport) Listen(ctx context.Context, addr string) (Listener, error
 
 func (t *tcpTransport) Dial(ctx context.Context, addr string) (Conn, error) {
 	dialer := net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp6", addr)
+	conn, err := dialer.DialContext(ctx, "tcp4", addr)
 	if err != nil {
 		return nil, err
 	}

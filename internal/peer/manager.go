@@ -201,15 +201,15 @@ func (m *peerManager) startBrowsing() error {
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		ticker := time.NewTicker(120 * time.Second)
+		ticker := time.NewTicker(10 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
 			case <-m.ctx.Done():
 				return
 			case <-ticker.C:
-				m.logger.Infof("[Discovery] 尝试浏览服务")
-				m.doBrowse() // 每次独立扫描，互不干扰
+				// m.logger.Infof("[Discovery] 尝试浏览服务")
+				// m.doBrowse() // 每次独立扫描，互不干扰
 			}
 		}
 	}()
@@ -382,7 +382,7 @@ func (m *peerManager) cleanupLoop() {
 		case <-m.ctx.Done():
 			return
 		case <-ticker.C:
-			m.cleanupOfflinePeers()
+			// m.cleanupOfflinePeers()
 		}
 	}
 }
