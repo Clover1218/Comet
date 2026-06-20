@@ -335,6 +335,7 @@ func main() {
 		config.GlobalConfig.Transfer.MaxWorkers,
 		config.GlobalConfig.Transfer.Timeout,
 		config.GlobalConfig.Security.Token,
+		log,
 	)
 
 	receiver := engine.NewReceiver(
@@ -344,6 +345,7 @@ func main() {
 		config.GlobalConfig.Transfer.ChunkSize,
 		config.GlobalConfig.Transfer.Timeout,
 		config.GlobalConfig.Security.Token,
+		log,
 	)
 
 	// 7. 启动接收服务

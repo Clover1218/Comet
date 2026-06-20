@@ -102,10 +102,10 @@ func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port
 
 // Start 启动发现
 func (m *peerManager) Start(ctx context.Context) error {
-	ifaces, _ := net.Interfaces()
-	for _, i := range ifaces {
-		m.logger.Infof("网卡名: %s", i.Name)
-	}
+	// ifaces, _ := net.Interfaces()
+	// for _, i := range ifaces {
+	// 	m.logger.Infof("网卡名: %s", i.Name)
+	// }
 	m.logger.Infof("[Discovery] 启动节点发现, 自身ID: %s, 端口: %d", m.selfID, m.port)
 
 	// 1. 从存储加载缓存的节点列表（离线节点也加载，便于快速显示）

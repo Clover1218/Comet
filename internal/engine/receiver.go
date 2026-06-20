@@ -30,7 +30,7 @@ type Receiver struct {
 	logger       *logger.Logger
 }
 
-func NewReceiver(transport network.Transport, store storage.Store, saveDir string, chunkSize int64, timeout time.Duration, token string) *Receiver {
+func NewReceiver(transport network.Transport, store storage.Store, saveDir string, chunkSize int64, timeout time.Duration, token string, log *logger.Logger) *Receiver {
 	return &Receiver{
 		transport: transport,
 		store:     store,
@@ -38,6 +38,7 @@ func NewReceiver(transport network.Transport, store storage.Store, saveDir strin
 		chunkSize: chunkSize,
 		timeout:   timeout,
 		token:     token,
+		logger:    log,
 	}
 }
 

@@ -30,7 +30,7 @@ type Sender struct {
 	logger       *logger.Logger
 }
 
-func NewSender(transport network.Transport, store storage.Store, chunkSize int64, maxWorkers int, timeout time.Duration, token string) *Sender {
+func NewSender(transport network.Transport, store storage.Store, chunkSize int64, maxWorkers int, timeout time.Duration, token string, log *logger.Logger) *Sender {
 	return &Sender{
 		transport:  transport,
 		store:      store,
@@ -38,6 +38,7 @@ func NewSender(transport network.Transport, store storage.Store, chunkSize int64
 		maxWorkers: maxWorkers,
 		timeout:    timeout,
 		token:      token,
+		logger:     log,
 	}
 }
 
