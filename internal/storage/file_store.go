@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	"comet/internal/models"
 )
@@ -107,74 +108,48 @@ func (fs *FileStore) DeleteTask(taskID string) error {
 	return os.Remove(path)
 }
 
-// SendTask operations
-func (fs *FileStore) SaveSendTask(task *models.SendTask) error {
-	dir := filepath.Join(fs.baseDir, "queue", "send")
-	return fs.atomicSave(dir, task.TaskID+".json", task)
-}
-
-func (fs *FileStore) LoadSendTask(taskID string) (*models.SendTask, error) {
-	dir := filepath.Join(fs.baseDir, "queue", "send")
-	var task models.SendTask
-	if err := fs.atomicLoad(dir, taskID+".json", &task); err != nil {
-		return nil, err
-	}
-	return &task, nil
-}
-
-func (fs *FileStore) ListSendTasks() ([]*models.SendTask, error) {
-	dir := filepath.Join(fs.baseDir, "queue", "send")
-	return listJSONFiles[models.SendTask](fs, dir)
-}
-
-func (fs *FileStore) DeleteSendTask(taskID string) error {
-	path := filepath.Join(fs.baseDir, "queue", "send", taskID+".json")
-	return os.Remove(path)
-}
-
-// ReceiveTask operations
-func (fs *FileStore) SaveReceiveTask(task *models.ReceiveTask) error {
-	dir := filepath.Join(fs.baseDir, "queue", "receive")
-	return fs.atomicSave(dir, task.TaskID+".json", task)
-}
-
-func (fs *FileStore) LoadReceiveTask(taskID string) (*models.ReceiveTask, error) {
-	dir := filepath.Join(fs.baseDir, "queue", "receive")
-	var task models.ReceiveTask
-	if err := fs.atomicLoad(dir, taskID+".json", &task); err != nil {
-		return nil, err
-	}
-	return &task, nil
-}
-
-func (fs *FileStore) ListReceiveTasks() ([]*models.ReceiveTask, error) {
-	dir := filepath.Join(fs.baseDir, "queue", "receive")
-	return listJSONFiles[models.ReceiveTask](fs, dir)
-}
-
-func (fs *FileStore) DeleteReceiveTask(taskID string) error {
-	path := filepath.Join(fs.baseDir, "queue", "receive", taskID+".json")
-	return os.Remove(path)
-}
-
 // Checkpoint operations
 func (fs *FileStore) SaveCheckpoint(sessionID string, cp *models.Checkpoint) error {
 	dir := filepath.Join(fs.baseDir, "checkpoints")
-	return fs.atomicSave(dir, sessionID+".chk", cp)
+	return fs.atomicSave(dir, sessionID+".json", cp)
 }
 
 func (fs *FileStore) LoadCheckpoint(sessionID string) (*models.Checkpoint, error) {
 	dir := filepath.Join(fs.baseDir, "checkpoints")
 	var cp models.Checkpoint
-	if err := fs.atomicLoad(dir, sessionID+".chk", &cp); err != nil {
+	if err := fs.atomicLoad(dir, sessionID+".json", &cp); err != nil {
 		return nil, err
 	}
 	return &cp, nil
 }
 
 func (fs *FileStore) DeleteCheckpoint(sessionID string) error {
-	path := filepath.Join(fs.baseDir, "checkpoints", sessionID+".chk")
+	path := filepath.Join(fs.baseDir, "checkpoints", sessionID+".json")
 	return os.Remove(path)
+}
+
+// UpdateCheckpoint 增量更新 checkpoint：加载已有数据，调用 updateFn 修改，更新 UpdatedAt 后保存
+func (fs *FileStore) UpdateCheckpoint(sessionID string, updateFn func(*models.Checkpoint)) (*models.Checkpoint, error) {
+	cp, err := fs.LoadCheckpoint(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	if cp == nil {
+		return nil, os.ErrNotExist
+	}
+
+	updateFn(cp)
+	cp.UpdatedAt = time.Now()
+
+	dir := filepath.Join(fs.baseDir, "checkpoints")
+	if err := fs.atomicSave(dir, sessionID+".json", cp); err != nil {
+		return nil, err
+	}
+	return cp, nil
+}
+func (fs *FileStore) ListCheckpoint() ([]*models.Checkpoint, error) {
+	dir := filepath.Join(fs.baseDir, "checkpoints")
+	return listJSONFiles[models.Checkpoint](fs, dir)
 }
 
 // Peer operations

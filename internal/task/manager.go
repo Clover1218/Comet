@@ -23,7 +23,8 @@ func NewTaskManager(store storage.Store) *TaskManager {
 
 // CreateTaskFromPath 扫描路径创建Task并保存
 func (tm *TaskManager) CreateTaskFromPath(path string) (*models.Task, error) {
-	task, err := createTask(path, strconv.Itoa(tm.maxIndex+1))
+
+	task, err := createTask(path, strconv.Itoa(tm.getMaxIndex()+1))
 	if err != nil {
 		return nil, err
 	}
@@ -34,12 +35,13 @@ func (tm *TaskManager) CreateTaskFromPath(path string) (*models.Task, error) {
 }
 
 // ListTasks 列出所有已保存的Task
-func (tm *TaskManager) ListTasks() ([]*models.Task, error) {
-	tasks, err := tm.store.ListTasks()
-	if err != nil {
-		return nil, err
-	}
+func (tm *TaskManager) getMaxIndex() int {
+
 	if tm.maxIndex == -1 {
+		tasks, err := tm.store.ListTasks()
+		if err != nil {
+			return -1
+		}
 		tmpIndex := tm.maxIndex
 		for _, task := range tasks {
 			taskID, err := strconv.Atoi(task.TaskID)
@@ -49,6 +51,13 @@ func (tm *TaskManager) ListTasks() ([]*models.Task, error) {
 			tmpIndex = max(tmpIndex, taskID)
 		}
 		tm.maxIndex = tmpIndex
+	}
+	return tm.maxIndex
+}
+func (tm *TaskManager) ListTasks() ([]*models.Task, error) {
+	tasks, err := tm.store.ListTasks()
+	if err != nil {
+		return nil, err
 	}
 
 	return tasks, err

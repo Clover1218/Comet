@@ -17,6 +17,7 @@ import (
 	"comet/internal/models"
 	"comet/internal/network"
 	"comet/internal/storage"
+	"comet/internal/zipper"
 )
 
 type Receiver struct {
@@ -98,40 +99,81 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 	}
 
 	meta := string(payload)
-	parts := strings.SplitN(meta, "|", 3)
-	if len(parts) != 3 {
+	parts := strings.SplitN(meta, "|", 4)
+	if len(parts) < 3 {
 		conn.SendPacket(network.CmdError, []byte("元数据格式错误"))
 		return
 	}
 	fileName := parts[0]
 	totalSize, _ := strconv.ParseInt(parts[1], 10, 64)
 	sessionID := parts[2]
+	isFolder := len(parts) >= 4 && parts[3] == "1"
 
-	r.logger.Infof("[Receiver] 接收: %s, 大小: %d, session: %s", fileName, totalSize, sessionID)
+	r.logger.Infof("[Receiver] 接收: %s, 大小: %d, session: %s, isFolder: %t", fileName, totalSize, sessionID, isFolder)
 
 	// 3. 确认元数据
 	conn.SendPacket(network.CmdMetaAck, nil)
 
-	// 4. 准备保存路径
-	savePath := filepath.Join(r.saveDir, fileName)
-	os.MkdirAll(filepath.Dir(savePath), 0755)
+	// 4. 断点续传 - 与发送端交换位图
+	totalChunks := int((totalSize + r.chunkSize - 1) / r.chunkSize)
 
-	// 检查断点续传
 	cp, _ := r.store.LoadCheckpoint(sessionID)
 	if cp != nil {
-		r.logger.Infof("[Receiver] 断点续传, 已完成 %d/%d 块", countTrue(cp.Completed), cp.TotalChunks)
-		// 发送已完成块列表
-		// 简化实现
+		r.logger.Infof("[Receiver] 发现本地断点记录, 已完成 %d/%d 块", countTrue(cp.Completed), cp.TotalChunks)
 	}
+
+	// 等待发送端的查询，回复本地位图
+	cmd, payload, err = conn.ReadPacket()
+	if err != nil {
+		r.logger.Errorf("[Receiver] 读取查询失败: %v", err)
+		return
+	}
+	if cmd != network.CmdQuery {
+		conn.SendPacket(network.CmdError, []byte("期望QUERY"))
+		return
+	}
+
+	localCompleted := []bool{}
+	if cp != nil {
+		localCompleted = cp.Completed
+	}
+	if err := conn.SendPacket(network.CmdQueryResp, boolsToBytes(localCompleted)); err != nil {
+		r.logger.Errorf("[Receiver] 发送位图失败: %v", err)
+		return
+	}
+
+	// 等待发送端返回合并后的位图
+	cmd, payload, err = conn.ReadPacket()
+	if err != nil {
+		r.logger.Errorf("[Receiver] 读取合并位图失败: %v", err)
+		return
+	}
+	if cmd != network.CmdChkSync {
+		conn.SendPacket(network.CmdError, []byte("期望CHKSYNC"))
+		return
+	}
+
+	completed := bytesToBools(payload)
+	if len(completed) == 0 {
+		completed = make([]bool, totalChunks)
+	}
+
+	// 保存合并后的位图
+	r.store.UpdateCheckpoint(sessionID, func(cp *models.Checkpoint) {
+		c := make([]bool, len(completed))
+		copy(c, completed)
+		cp.Completed = c
+	})
+	r.logger.Infof("[Receiver] 断点合并后: 已完成 %d/%d 块", countTrue(completed), totalChunks)
+
+	// 准备保存路径：downloads/{sessionID}/
+	sessionDir := filepath.Join(r.saveDir, sessionID)
+	os.MkdirAll(sessionDir, 0755)
+	savePath := filepath.Join(sessionDir, fileName)
 
 	// 5. 接收分块
 	var transferred int64
-	totalChunks := int((totalSize + r.chunkSize - 1) / r.chunkSize)
 	r.logger.Infof("[Receiver] 总块: %d 总大小: %d ", totalChunks, totalSize)
-	completed := make([]bool, totalChunks)
-	if cp != nil {
-		completed = cp.Completed
-	}
 
 	// 使用临时文件
 	tmpFile := savePath + ".tmp"
@@ -186,14 +228,18 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 			r.logger.Errorf("[Receiver] 写入失败: %v", err)
 			continue
 		}
-		r.logger.Infof("[Receiver] idx: %d", idx)
-		// completed[idx] = true
+		r.logger.Debugf("[Receiver] idx: %d", idx)
+		completed[idx] = true
 		atomic.AddInt64(&transferred, int64(len(data)))
 
-		// 保存进度
-		// if atomic.LoadInt64(&transferred)%(r.chunkSize*10) == 0 {
-		// 	r.saveCheckpoint(sessionID, completed)
-		// }
+		// 定期保存进度（每10块保存一次）
+		if atomic.LoadInt64(&transferred)%(r.chunkSize*10) < r.chunkSize {
+			r.store.UpdateCheckpoint(sessionID, func(cp *models.Checkpoint) {
+				c := make([]bool, len(completed))
+				copy(c, completed)
+				cp.Completed = c
+			})
+		}
 
 		if r.progressFunc != nil {
 			r.progressFunc(sessionID, transferred, totalSize)
@@ -201,21 +247,35 @@ func (r *Receiver) handleConnection(ctx context.Context, conn network.Conn) {
 		r.logger.Debugf("[Receiver] 分块 %d 已接收", idx)
 	}
 
-	// 6. 保存最终进度并重命名
-	r.saveCheckpoint(sessionID, completed)
+	// 6. 保存最终进度，重命名临时文件，解压到 session 目录
+	r.store.UpdateCheckpoint(sessionID, func(cp *models.Checkpoint) {
+		c := make([]bool, len(completed))
+		copy(c, completed)
+		cp.Completed = c
+	})
 	f.Close()
 
-	// 如果是ZIP文件，解压
-	if strings.HasSuffix(savePath, ".zip") {
-		destDir := strings.TrimSuffix(savePath, ".zip")
-		r.logger.Infof("[Receiver] 解压到: %s", destDir)
-		if err := unzip(tmpFile, destDir); err != nil {
+	// 临时文件 → 正式文件（Windows rename 不覆盖，需先删除目标）
+	os.Remove(savePath)
+	if err := os.Rename(tmpFile, savePath); err != nil {
+		r.logger.Errorf("[Receiver] 重命名文件失败: %v", err)
+		return
+	}
+
+	if isFolder {
+		// 解压到 sessionDir（如 downloads/{sessionID}/）
+		z := zipper.NewZstdZipper(0)
+		r.logger.Infof("[Receiver] 解压到: %s", sessionDir)
+
+		if err := z.Unpack(savePath, sessionDir); err != nil {
 			r.logger.Errorf("[Receiver] 解压失败: %v", err)
 			return
 		}
-		os.Remove(tmpFile)
+
+		// 删除收到的压缩包
+		os.Remove(savePath)
 	} else {
-		os.Rename(tmpFile, savePath)
+		r.logger.Infof("[Receiver] 收到普通文件: %s", savePath)
 	}
 
 	// 7. 清理
@@ -249,17 +309,6 @@ func (r *Receiver) authenticate(conn network.Conn) error {
 
 	conn.SendPacket(network.CmdAuthFail, []byte("无效Token"))
 	return fmt.Errorf("认证失败")
-}
-
-func (r *Receiver) saveCheckpoint(sessionID string, completed []bool) {
-	cp := &models.Checkpoint{
-		SessionID:   sessionID,
-		TotalChunks: len(completed),
-		ChunkSize:   r.chunkSize,
-		Completed:   completed,
-		UpdatedAt:   time.Now(),
-	}
-	r.store.SaveCheckpoint(sessionID, cp)
 }
 
 func unzip(zipPath, destDir string) error {

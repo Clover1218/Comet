@@ -183,17 +183,20 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 			var isFolder bool
 			if err == nil && task != nil {
 				path = task.SourcePath
-				isFolder = true
-				fmt.Printf("使用任务 '%s' 发送文件夹: %s\n", task.Name, path)
-			} else {
-				path = src
 				info, err := os.Stat(path)
+				if err != nil {
+					fmt.Printf("错误: %v\n", err)
+					fmt.Print("Comet> ")
+				}
+				isFolder = info.IsDir()
+				fmt.Printf("使用任务 '%s' 发送 : %s\n", task.Name, path)
+			} else {
 				if err != nil {
 					fmt.Printf("错误: %v\n", err)
 					fmt.Print("Comet> ")
 					continue
 				}
-				isFolder = info.IsDir()
+
 			}
 
 			fmt.Printf("发送 %s 到 %s ...\n", path, targetAddr)
@@ -213,7 +216,67 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 				}
 				fmt.Print("Comet> ")
 			}()
+		case "checkpoints":
+			if len(args) < 2 {
+				fmt.Println("用法: checkpoints continue <id> | checkpoints list")
+				fmt.Print("Comet> ")
+				continue
+			}
+			subCmd := args[1]
+			switch subCmd {
+			case "continue":
+				if len(args) < 4 {
+					fmt.Println("用法: checkpoints continue <id> <address>")
+					break
+				}
+				sessionID := args[2]
 
+				checkpoint, err := store.LoadCheckpoint(sessionID)
+				if err != nil {
+					fmt.Printf("未找到该检查点: %v\n", err)
+				}
+				addr := args[3]
+				if addr == "" {
+					addr = checkpoint.TargetAddr
+				}
+				fmt.Printf("找到检查点，继续：")
+				go func() {
+					var err error
+					if !checkpoint.IsFoler {
+						err = sender.SendFileBySession(ctx, checkpoint.FilePath, addr, sessionID)
+					} else {
+						err = sender.SendFolderBySession(ctx, checkpoint.FilePath, addr, sessionID)
+					}
+					if err != nil {
+						fmt.Printf("继续检查点失败: %v\n", err)
+					}
+				}()
+
+			case "list":
+				checkpoints, err := store.ListCheckpoint()
+				if err != nil {
+					fmt.Printf("获取检查点列表失败: %v\n", err)
+				} else if len(checkpoints) == 0 {
+					fmt.Println("没有检查点")
+				} else {
+					fmt.Println("检查点列表:")
+
+					for i, t := range checkpoints {
+						var typeStr string
+						if t.Type == 0 {
+							typeStr = "发送请求"
+						} else {
+							typeStr = "接收请求"
+						}
+						fmt.Printf("  [%d] %s \n  %s 进度(%d/%d) 最后更新于 %s\n",
+							i+1, t.SessionID, typeStr, t.TotalChunks, t.TotalChunks,
+							t.UpdatedAt.Format("15:04:05"))
+					}
+				}
+
+			default:
+				fmt.Printf("未知子命令: %s\n", subCmd)
+			}
 		// case "receive":
 		// 	if len(args) < 2 {
 		// 		fmt.Println("用法: receive list | receive accept <session-id> | receive reject <session-id>")

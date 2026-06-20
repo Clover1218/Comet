@@ -18,6 +18,7 @@ const (
 	CmdChunkAck  byte = 0x21
 	CmdQuery     byte = 0x30
 	CmdQueryResp byte = 0x31
+	CmdChkSync   byte = 0x32
 	CmdComplete  byte = 0x40
 	CmdError     byte = 0xFF
 )
