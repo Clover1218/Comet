@@ -3,15 +3,18 @@ package config
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 )
 
 type Config struct {
-	Network NetworkConfig `mapstructure:"network"`
-	Storage StorageConfig `mapstructure:"storage"`
-	Log     LogConfig     `mapstructure:"log"`
-	Node    NodeConfig    `mapstructure:"node"`
+	Network  NetworkConfig  `mapstructure:"network"`
+	Security SecurityConfig `mapstructure:"security"`
+	Storage  StorageConfig  `mapstructure:"storage"`
+	Transfer TransferConfig `mapstructure:"transfer"`
+	Log      LogConfig      `mapstructure:"log"`
+	Node     NodeConfig     `mapstructure:"node"`
 }
 type NodeConfig struct {
 	ID   string `mapstructure:"id"`
@@ -34,6 +37,17 @@ type StorageConfig struct {
 }
 type LogConfig struct {
 	Path string `mapstructure:"path"`
+}
+type SecurityConfig struct {
+	AuthMode  string `mapstructure:"auth_mode"`
+	Token     string `mapstructure:"token"`
+	TokenFile string `mapstructure:"token_file"`
+}
+type TransferConfig struct {
+	ChunkSize  int64         `mapstructure:"chunk_size"`
+	MaxWorkers int           `mapstructure:"max_workers"`
+	Timeout    time.Duration `mapstructure:"timeout"`
+	MaxRetries int           `mapstructure:"max_retries"`
 }
 
 var GlobalConfig *Config

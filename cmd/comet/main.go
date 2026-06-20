@@ -3,25 +3,29 @@ package main
 import (
 	"bufio"
 	"comet/internal/config"
+	"comet/internal/engine"
 	"comet/internal/logger"
+	"comet/internal/network"
 	"comet/internal/peer"
 	"comet/internal/storage"
+	"comet/internal/task"
 	"context"
 	"fmt"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
 
 func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMgr peer.Manager,
-
-// sender *engine.Sender, receiver *engine.Receiver, taskMgr *engine.TaskManager,
+	taskMgr *task.TaskManager, sender *engine.Sender, receiver *engine.Receiver, logger *logger.Logger,
 ) {
 	scanner := bufio.NewScanner(os.Stdin)
-	fmt.Println("\n📡 P2P文件传输程序 v1.0")
+	fmt.Println("\n= Comet =")
 	fmt.Println("输入 help 查看命令")
-	fmt.Print("\np2p> ")
+	fmt.Print("\nComet> ")
 
 	for scanner.Scan() {
 		select {
@@ -32,13 +36,13 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 
 		input := strings.TrimSpace(scanner.Text())
 		if input == "" {
-			fmt.Print("p2p> ")
+			fmt.Print("Comet> ")
 			continue
 		}
 
 		args := strings.Fields(input)
 		if len(args) == 0 {
-			fmt.Print("p2p> ")
+			fmt.Print("Comet> ")
 			continue
 		}
 		cmd := args[0]
@@ -63,7 +67,7 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 		case "peer":
 			if len(args) < 2 {
 				fmt.Println("用法: peer add <name> <addr> 或 peer remove <id>")
-				fmt.Print("p2p> ")
+				fmt.Print("Comet> ")
 				continue
 			}
 			subCmd := args[1]
@@ -95,120 +99,120 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 				fmt.Printf("未知子命令: %s\n", subCmd)
 			}
 
-		// case "task":
-		// 	if len(args) < 2 {
-		// 		fmt.Println("用法: task create <path> | task list | task delete <id>")
-		// 		fmt.Print("p2p> ")
-		// 		continue
-		// 	}
-		// 	subCmd := args[1]
-		// 	switch subCmd {
-		// 	case "create":
-		// 		if len(args) < 3 {
-		// 			fmt.Println("用法: task create <path>")
-		// 			break
-		// 		}
-		// 		path := args[2]
-		// 		task, err := taskMgr.CreateTaskFromPath(path)
-		// 		if err != nil {
-		// 			fmt.Printf("创建任务失败: %v\n", err)
-		// 		} else {
-		// 			fmt.Printf("✅ 任务创建成功: %s (ID: %s, 大小: %.2f MB, 文件: %d)\n",
-		// 				task.Name, task.TaskID, float64(task.TotalSize)/1024/1024, task.FileCount)
-		// 		}
-		// 	case "list":
-		// 		tasks, err := taskMgr.ListTasks()
-		// 		if err != nil {
-		// 			fmt.Printf("获取任务列表失败: %v\n", err)
-		// 		} else if len(tasks) == 0 {
-		// 			fmt.Println("没有任务")
-		// 		} else {
-		// 			fmt.Println("任务列表:")
-		// 			for i, t := range tasks {
-		// 				fmt.Printf("  [%d] %s (%s) %.2f MB %d文件 创建于 %s\n",
-		// 					i+1, t.Name, t.TaskID, float64(t.TotalSize)/1024/1024, t.FileCount,
-		// 					t.CreatedAt.Format("15:04:05"))
-		// 			}
-		// 		}
-		// 	case "delete":
-		// 		if len(args) < 3 {
-		// 			fmt.Println("用法: task delete <id>")
-		// 			break
-		// 		}
-		// 		id := args[2]
-		// 		if err := taskMgr.DeleteTask(id); err != nil {
-		// 			fmt.Printf("删除失败: %v\n", err)
-		// 		} else {
-		// 			fmt.Printf("✅ 任务已删除: %s\n", id)
-		// 		}
-		// 	default:
-		// 		fmt.Printf("未知子命令: %s\n", subCmd)
-		// 	}
+		case "task":
+			if len(args) < 2 {
+				fmt.Println("用法: task create <path> | task list | task delete <id>")
+				fmt.Print("Comet> ")
+				continue
+			}
+			subCmd := args[1]
+			switch subCmd {
+			case "create":
+				if len(args) < 3 {
+					fmt.Println("用法: task create <path>")
+					break
+				}
+				path := args[2]
+				task, err := taskMgr.CreateTaskFromPath(path)
+				if err != nil {
+					fmt.Printf("创建任务失败: %v\n", err)
+				} else {
+					fmt.Printf("✅ 任务创建成功: %s (ID: %s, 大小: %.2f MB, 文件: %d)\n",
+						task.Name, task.TaskID, float64(task.TotalSize)/1024/1024, task.FileCount)
+				}
+			case "list":
+				tasks, err := taskMgr.ListTasks()
+				if err != nil {
+					fmt.Printf("获取任务列表失败: %v\n", err)
+				} else if len(tasks) == 0 {
+					fmt.Println("没有任务")
+				} else {
+					fmt.Println("任务列表:")
+					for i, t := range tasks {
+						fmt.Printf("  [%d] %s (%s) %.2f MB %d文件 创建于 %s\n",
+							i+1, t.Name, t.TaskID, float64(t.TotalSize)/1024/1024, t.FileCount,
+							t.CreatedAt.Format("15:04:05"))
+					}
+				}
+			case "delete":
+				if len(args) < 3 {
+					fmt.Println("用法: task delete <id>")
+					break
+				}
+				id := args[2]
+				if err := taskMgr.DeleteTask(id); err != nil {
+					fmt.Printf("删除失败: %v\n", err)
+				} else {
+					fmt.Printf("✅ 任务已删除: %s\n", id)
+				}
+			default:
+				fmt.Printf("未知子命令: %s\n", subCmd)
+			}
 
-		// case "send":
-		// 	if len(args) < 3 {
-		// 		fmt.Println("用法: send <task_id或路径> <目标地址或节点序号>")
-		// 		fmt.Print("p2p> ")
-		// 		continue
-		// 	}
-		// 	target := args[2]
-		// 	// 判断目标是否是序号
-		// 	var targetAddr string
-		// 	if idx, err := strconv.Atoi(target); err == nil {
-		// 		peers, _ := peerMgr.ListPeers()
-		// 		if idx >= 1 && idx <= len(peers) {
-		// 			targetAddr = peers[idx-1].Addr
-		// 		} else {
-		// 			fmt.Printf("错误: 节点序号 %d 无效\n", idx)
-		// 			fmt.Print("p2p> ")
-		// 			continue
-		// 		}
-		// 	} else {
-		// 		targetAddr = target
-		// 	}
-		// 	if targetAddr == "" {
-		// 		fmt.Println("错误: 无法解析目标地址")
-		// 		fmt.Print("p2p> ")
-		// 		continue
-		// 	}
+		case "send":
+			if len(args) < 3 {
+				fmt.Println("用法: send <task_id或路径> <目标地址或节点序号>")
+				fmt.Print("Comet> ")
+				continue
+			}
+			target := args[2]
+			// 判断目标是否是序号
+			var targetAddr string
+			if idx, err := strconv.Atoi(target); err == nil {
+				peers, _ := peerMgr.ListPeers()
+				if idx >= 1 && idx <= len(peers) {
+					targetAddr = peers[idx-1].Addr
+				} else {
+					fmt.Printf("错误: 节点序号 %d 无效\n", idx)
+					fmt.Print("Comet> ")
+					continue
+				}
+			} else {
+				targetAddr = target
+			}
+			if targetAddr == "" {
+				fmt.Println("错误: 无法解析目标地址")
+				fmt.Print("Comet> ")
+				continue
+			}
 
-		// 	// 判断第一个参数是Task ID还是路径
-		// 	src := args[1]
-		// 	task, err := taskMgr.GetTask(src)
-		// 	var path string
-		// 	var isFolder bool
-		// 	if err == nil && task != nil {
-		// 		path = task.SourcePath
-		// 		isFolder = true
-		// 		fmt.Printf("使用任务 '%s' 发送文件夹: %s\n", task.Name, path)
-		// 	} else {
-		// 		path = src
-		// 		info, err := os.Stat(path)
-		// 		if err != nil {
-		// 			fmt.Printf("错误: %v\n", err)
-		// 			fmt.Print("p2p> ")
-		// 			continue
-		// 		}
-		// 		isFolder = info.IsDir()
-		// 	}
+			// 判断第一个参数是Task ID还是路径
+			src := args[1]
+			task, err := taskMgr.GetTask(src)
+			var path string
+			var isFolder bool
+			if err == nil && task != nil {
+				path = task.SourcePath
+				isFolder = true
+				fmt.Printf("使用任务 '%s' 发送文件夹: %s\n", task.Name, path)
+			} else {
+				path = src
+				info, err := os.Stat(path)
+				if err != nil {
+					fmt.Printf("错误: %v\n", err)
+					fmt.Print("Comet> ")
+					continue
+				}
+				isFolder = info.IsDir()
+			}
 
-		// 	fmt.Printf("发送 %s 到 %s ...\n", path, targetAddr)
+			fmt.Printf("发送 %s 到 %s ...\n", path, targetAddr)
 
-		// 	go func() {
-		// 		var err error
-		// 		if isFolder {
-		// 			err = sender.SendFolder(ctx, path, targetAddr)
-		// 		} else {
-		// 			err = sender.SendFile(ctx, path, targetAddr)
-		// 		}
-		// 		if err != nil {
-		// 			logger.Errorf("发送失败: %v", err)
-		// 			fmt.Printf("\n❌ 发送失败: %v\n", err)
-		// 		} else {
-		// 			fmt.Println("\n✅ 发送完成!")
-		// 		}
-		// 		fmt.Print("p2p> ")
-		// 	}()
+			go func() {
+				var err error
+				if isFolder {
+					err = sender.SendFolder(ctx, path, targetAddr)
+				} else {
+					err = sender.SendFile(ctx, path, targetAddr)
+				}
+				if err != nil {
+					logger.Errorf("发送失败: %v", err)
+					fmt.Printf("\n❌ 发送失败: %v\n", err)
+				} else {
+					fmt.Println("\n✅ 发送完成!")
+				}
+				fmt.Print("Comet> ")
+			}()
 
 		// case "receive":
 		// 	if len(args) < 2 {
@@ -314,7 +318,7 @@ func main() {
 		config.GlobalConfig.Network.Port,
 		config.GlobalConfig.Network.InterfaceName,
 	)
-
+	taskMgr := task.NewTaskManager(store)
 	// 启动发现
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -323,7 +327,32 @@ func main() {
 		log.Errorf("启动节点发现失败: %v", err)
 	}
 	defer peerMgr.Stop()
+	transport := network.NewTCPTransport()
+	sender := engine.NewSender(
+		transport,
+		store,
+		config.GlobalConfig.Transfer.ChunkSize,
+		config.GlobalConfig.Transfer.MaxWorkers,
+		config.GlobalConfig.Transfer.Timeout,
+		config.GlobalConfig.Security.Token,
+	)
 
+	receiver := engine.NewReceiver(
+		transport,
+		store,
+		filepath.Join(config.GlobalConfig.Storage.DataDir, config.GlobalConfig.Storage.DownloadsDir),
+		config.GlobalConfig.Transfer.ChunkSize,
+		config.GlobalConfig.Transfer.Timeout,
+		config.GlobalConfig.Security.Token,
+	)
+
+	// 7. 启动接收服务
+	go func() {
+		listenAddr := fmt.Sprintf("%s:%d", config.GlobalConfig.Network.ListenAddr, config.GlobalConfig.Network.Port)
+		if err := receiver.Start(ctx, listenAddr); err != nil && err != context.Canceled {
+			log.Errorf("接收服务错误: %v", err)
+		}
+	}()
 	// 监听节点变化事件（可用于 CLI 提示）
 	go func() {
 		for event := range peerMgr.Events() {
@@ -335,6 +364,6 @@ func main() {
 			}
 		}
 	}()
-	runCLI(ctx, config.GlobalConfig, store, peerMgr)
+	runCLI(ctx, config.GlobalConfig, store, peerMgr, taskMgr, sender, receiver, log)
 
 }

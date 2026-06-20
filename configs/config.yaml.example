@@ -7,7 +7,7 @@ network:
   port: 9001
   discovery_enabled: true
   discovery_interval: 5        # mDNS广播间隔
-  interface_name: "VMware Network Adapter VMnet1"
+  interface_name: "VirtualBox Host-Only Network"
 
 # 传输设置
 transfer:

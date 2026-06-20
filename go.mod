@@ -2,7 +2,11 @@ module comet
 
 go 1.25.6
 
-require github.com/spf13/viper v1.21.0
+require (
+	github.com/google/uuid v1.6.0
+	github.com/spf13/viper v1.21.0
+	golang.org/x/sync v0.16.0
+)
 
 require (
 	github.com/cenkalti/backoff v2.2.1+incompatible // indirect

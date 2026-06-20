@@ -85,6 +85,7 @@ func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port
 	if err != nil {
 		return nil
 	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	return &peerManager{
 		logger:  log,
@@ -101,7 +102,10 @@ func NewPeerManager(log *logger.Logger, store storage.Store, selfID string, port
 
 // Start 启动发现
 func (m *peerManager) Start(ctx context.Context) error {
-
+	ifaces, _ := net.Interfaces()
+	for _, i := range ifaces {
+		m.logger.Infof("网卡名: %s", i.Name)
+	}
 	m.logger.Infof("[Discovery] 启动节点发现, 自身ID: %s, 端口: %d", m.selfID, m.port)
 
 	// 1. 从存储加载缓存的节点列表（离线节点也加载，便于快速显示）
@@ -166,9 +170,9 @@ func (m *peerManager) Register(port int, meta map[string]string) error {
 		"_comet._tcp", // 服务类型（p2p file transfer）
 		"local.",      // 域
 		"",
-		port,                      // 端口
-		txtRecords,                // TXT记录
-		[]net.Interface{*m.iface}, // 回调（可留空）
+		port,       // 端口
+		txtRecords, // TXT记录
+		[]net.Interface{*m.iface},
 	)
 	if err != nil {
 		return err
@@ -193,17 +197,11 @@ func (m *peerManager) Unregister() error {
 
 // startBrowsing 开始浏览局域网节点
 func (m *peerManager) startBrowsing() error {
-	resolver, err := zeroconf.NewResolver(nil)
-	if err != nil {
-		return err
-	}
-	m.resolver = resolver
-
 	// 启动浏览（直接使用 m.ctx，确保只有 Stop 时才会取消）
 	m.wg.Add(1)
 	go func() {
 		defer m.wg.Done()
-		ticker := time.NewTicker(10 * time.Second)
+		ticker := time.NewTicker(120 * time.Second)
 		defer ticker.Stop()
 		for {
 			select {
@@ -223,7 +221,8 @@ func (m *peerManager) doBrowse() {
 
 	resolver, err := zeroconf.NewResolver(
 		zeroconf.SelectIfaces([]net.Interface{*m.iface}), // ✅ 正确写法
-		zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6))
+		zeroconf.SelectIPTraffic(zeroconf.IPv4AndIPv6),
+	)
 	if err != nil {
 		m.logger.Errorf("创建Resolver失败: %v", err)
 		return
