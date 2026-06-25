@@ -209,7 +209,7 @@ func (m *peerManager) startBrowsing() error {
 				return
 			case <-ticker.C:
 				// m.logger.Infof("[Discovery] 尝试浏览服务")
-				// m.doBrowse() // 每次独立扫描，互不干扰
+				m.doBrowse() // 每次独立扫描，互不干扰
 			}
 		}
 	}()

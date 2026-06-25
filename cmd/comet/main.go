@@ -17,7 +17,19 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 )
+
+// sanitizePath 移除路径中混入的不可见 Unicode 控制字符（如 U+202A 等）
+// 这些字符常从文件资源管理器或其他应用复制路径时混入，会导致 CreateFile 失败
+func sanitizePath(s string) string {
+	return strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, s)
+}
 
 func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMgr peer.Manager,
 	taskMgr *task.TaskManager, sender *engine.Sender, receiver *engine.Receiver, logger *logger.Logger,
@@ -112,7 +124,7 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 					fmt.Println("用法: task create <path>")
 					break
 				}
-				path := args[2]
+				path := sanitizePath(args[2])
 				task, err := taskMgr.CreateTaskFromPath(path)
 				if err != nil {
 					fmt.Printf("创建任务失败: %v\n", err)
@@ -177,7 +189,7 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 			}
 
 			// 判断第一个参数是Task ID还是路径
-			src := args[1]
+			src := sanitizePath(args[1])
 			task, err := taskMgr.GetTask(src)
 			var path string
 			var isFolder bool
@@ -191,12 +203,15 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 				isFolder = info.IsDir()
 				fmt.Printf("使用任务 '%s' 发送 : %s\n", task.Name, path)
 			} else {
+				// 当作直接路径处理
+				path = sanitizePath(args[1])
+				info, err := os.Stat(path)
 				if err != nil {
 					fmt.Printf("错误: %v\n", err)
 					fmt.Print("Comet> ")
 					continue
 				}
-
+				isFolder = info.IsDir()
 			}
 
 			fmt.Printf("发送 %s 到 %s ...\n", path, targetAddr)
@@ -229,13 +244,15 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 					fmt.Println("用法: checkpoints continue <id> <address>")
 					break
 				}
-				sessionID := args[2]
+				sessionID := sanitizePath(args[2])
 
 				checkpoint, err := store.LoadCheckpoint(sessionID)
 				if err != nil {
 					fmt.Printf("未找到该检查点: %v\n", err)
+					fmt.Print("Comet> ")
+					continue
 				}
-				addr := args[3]
+				addr := sanitizePath(args[3])
 				if addr == "" {
 					addr = checkpoint.TargetAddr
 				}
@@ -280,7 +297,7 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 		// case "receive":
 		// 	if len(args) < 2 {
 		// 		fmt.Println("用法: receive list | receive accept <session-id> | receive reject <session-id>")
-		// 		fmt.Print("p2p> ")
+		// 		fmt.Print("Comet> ")
 		// 		continue
 		// 	}
 		// 	subCmd := args[1]
@@ -329,7 +346,7 @@ func runCLI(ctx context.Context, cfg *config.Config, store storage.Store, peerMg
 		default:
 			fmt.Printf("未知命令: %s, 输入 help 查看帮助\n", cmd)
 		}
-		fmt.Print("p2p> ")
+		fmt.Print("Comet> ")
 	}
 }
 
